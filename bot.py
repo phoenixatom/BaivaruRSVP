@@ -68,14 +68,53 @@ _edit_state: dict[str, dict] = {}  # event_id -> {"last": float, "pending": asyn
 def load_json(path: Path) -> dict:
     if path.exists():
         try:
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return {}
     return {}
 
 
 def save_json(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+SAVE_DEBOUNCE = 0.75  # seconds: collapse a burst of mutations into one write
+_save_state: dict[Path, dict] = {}  # path -> {"task": asyncio.Task | None}
+
+
+async def _flush_save(path: Path, data: dict) -> None:
+    state = _save_state[path]
+    try:
+        await asyncio.sleep(SAVE_DEBOUNCE)
+        # Serialize on the loop (fast) so we capture a consistent snapshot,
+        # then push the blocking disk write off the event loop.
+        text = json.dumps(data, indent=2, ensure_ascii=False)
+        await asyncio.to_thread(path.write_text, text, encoding="utf-8")
+    except Exception as e:
+        logger.warning("Failed to save %s: %s", path.name, e)
+    finally:
+        state["task"] = None
+
+
+def schedule_save(path: Path, data: dict) -> None:
+    """Coalesce mutations into a single trailing write per SAVE_DEBOUNCE window."""
+    state = _save_state.setdefault(path, {"task": None})
+    if state["task"] is not None and not state["task"].done():
+        return  # a save is already pending; it'll pick up the latest state
+    state["task"] = asyncio.create_task(_flush_save(path, data))
+
+
+_event_locks: dict[str, asyncio.Lock] = {}
+
+
+def _event_lock(event_id: str) -> asyncio.Lock:
+    lock = _event_locks.get(event_id)
+    if lock is None:
+        lock = _event_locks[event_id] = asyncio.Lock()
+    return lock
 
 
 events: dict = load_json(DATA_FILE)
@@ -721,13 +760,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer()
         return
 
-    event = events.get(event_id)
-    if not event:
-        await query.answer("This event no longer exists.", show_alert=True)
-        return
-
-    if event.get("ended"):
-        await query.answer("RSVPs are closed for this event.", show_alert=True)
+    if action not in ("join", "leave"):
+        await query.answer()
         return
 
     user = query.from_user
@@ -737,33 +771,45 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "first_name": user.first_name,
         "last_name": user.last_name,
     }
-    participant_ids = [p["id"] for p in event["participants"]]
 
+    answer_text = ""
+    answer_alert = False
     changed = False
-    if action == "join":
-        if user.id in participant_ids:
-            await query.answer("You're already in.")
-        elif len(event["participants"]) >= event["max"]:
-            await query.answer("Sorry, the event is full.", show_alert=True)
+
+    async with _event_lock(event_id):
+        event = events.get(event_id)
+        if not event:
+            answer_text = "This event no longer exists."
+            answer_alert = True
+        elif event.get("ended"):
+            answer_text = "RSVPs are closed for this event."
+            answer_alert = True
         else:
-            event["participants"].append(user_dict)
-            changed = True
-            await query.answer("You're in! ✅")
-    elif action == "leave":
-        if user.id not in participant_ids:
-            await query.answer("You weren't in this event.")
-        else:
-            event["participants"] = [
-                p for p in event["participants"] if p["id"] != user.id
-            ]
-            changed = True
-            await query.answer("Removed.")
-    else:
-        await query.answer()
-        return
+            participant_ids = [p["id"] for p in event["participants"]]
+            if action == "join":
+                if user.id in participant_ids:
+                    answer_text = "You're already in."
+                elif len(event["participants"]) >= event["max"]:
+                    answer_text = "Sorry, the event is full."
+                    answer_alert = True
+                else:
+                    event["participants"].append(user_dict)
+                    changed = True
+                    answer_text = "You're in! ✅"
+            else:  # leave
+                if user.id not in participant_ids:
+                    answer_text = "You weren't in this event."
+                else:
+                    event["participants"] = [
+                        p for p in event["participants"] if p["id"] != user.id
+                    ]
+                    changed = True
+                    answer_text = "Removed."
+
+    await query.answer(answer_text, show_alert=answer_alert)
 
     if changed:
-        save_json(DATA_FILE, events)
+        schedule_save(DATA_FILE, events)
         await schedule_edit(context, event_id)
 
 
