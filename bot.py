@@ -1,8 +1,8 @@
 import asyncio
+import html
 import json
 import logging
 import os
-import re
 import uuid
 from pathlib import Path
 
@@ -98,13 +98,10 @@ def display_name(user) -> str:
     return name or str(user["id"])
 
 
-_MD_SPECIAL = re.compile(r"([_*\[\]()~`>#+\-=|{}.!\\])")
-
-
-def escape_md(text) -> str:
+def esc(text) -> str:
     if text is None:
         return ""
-    return _MD_SPECIAL.sub(r"\\\1", str(text))
+    return html.escape(str(text))
 
 
 def render_event_text(event: dict) -> str:
@@ -113,43 +110,43 @@ def render_event_text(event: dict) -> str:
     cap = event["max"]
     lines = []
     if event.get("ended"):
-        lines.append("🔒 *RSVPs CLOSED*")
+        lines.append("🔒 <b>RSVPs CLOSED</b>")
         lines.append("")
     lines.extend(
         [
-            f"📅 *{escape_md(event['description'])}*",
+            f"📅 <b>{esc(event['description'])}</b>",
             "",
-            f"🕐 *Start:* {escape_md(event['start'])}",
-            f"🕓 *End:* {escape_md(event['end'])}",
-            f"👥 *Participants:* {count}/{cap} \\(min {event['min']}\\)",
+            f"🕐 <b>Start:</b> {esc(event['start'])}",
+            f"🕓 <b>End:</b> {esc(event['end'])}",
+            f"👥 <b>Participants:</b> {count}/{cap} (min {event['min']})",
             "",
         ]
     )
     if participants:
-        lines.append("*Joined:*")
+        lines.append("<b>Joined:</b>")
         for i, p in enumerate(participants, start=1):
-            lines.append(f"{i}\\. {escape_md(display_name(p))}")
+            lines.append(f"{i}. {esc(display_name(p))}")
     elif event.get("ended"):
-        lines.append("_No one joined\\._")
+        lines.append("<i>No one joined.</i>")
     else:
-        lines.append("_No participants yet\\. Be the first to join\\!_")
+        lines.append("<i>No participants yet. Be the first to join!</i>")
     return "\n".join(lines)
 
 
 def render_summary_text(event: dict) -> str:
     participants = event["participants"]
     lines = [
-        f"🏁 *RSVPs closed:* {escape_md(event['description'])}",
+        f"🏁 <b>RSVPs closed:</b> {esc(event['description'])}",
         "",
-        f"👥 *Final count:* {len(participants)}/{event['max']} \\(min {event['min']}\\)",
+        f"👥 <b>Final count:</b> {len(participants)}/{event['max']} (min {event['min']})",
         "",
     ]
     if participants:
-        lines.append("*Final participant list:*")
+        lines.append("<b>Final participant list:</b>")
         for i, p in enumerate(participants, start=1):
-            lines.append(f"{i}\\. {escape_md(display_name(p))}")
+            lines.append(f"{i}. {esc(display_name(p))}")
     else:
-        lines.append("_No one joined this event\\._")
+        lines.append("<i>No one joined this event.</i>")
     return "\n".join(lines)
 
 
@@ -227,18 +224,18 @@ def render_wizard(data: dict, state: int) -> tuple[str, InlineKeyboardMarkup]:
     target_chat = data.get("chat_id")
     title = groups.get(str(target_chat), {}).get("title") if target_chat else None
 
-    lines = ["📝 *New Event*"]
+    lines = ["📝 <b>New Event</b>"]
     if title:
-        lines.append(f"_for {escape_md(title)}_")
+        lines.append(f"<i>for {esc(title)}</i>")
     lines.append("")
 
     if state == CONFIRM:
-        lines.append("*Preview. Ready to post?*")
+        lines.append("<b>Preview. Ready to post?</b>")
         lines.append("")
         for st in STEPS:
             label = STEP_LABELS[st]
             val = data.get(STEP_FIELDS[st], "")
-            lines.append(f"✅ *{label}:* {escape_md(str(val))}")
+            lines.append(f"✅ <b>{label}:</b> {esc(val)}")
         markup = InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("✅ Create event", callback_data="wiz:create")],
@@ -256,14 +253,14 @@ def render_wizard(data: dict, state: int) -> tuple[str, InlineKeyboardMarkup]:
         st_idx = STEPS.index(st)
         if st_idx < idx:
             val = data.get(STEP_FIELDS[st], "")
-            lines.append(f"✅ *{label}:* {escape_md(str(val))}")
+            lines.append(f"✅ <b>{label}:</b> {esc(val)}")
         elif st == state:
             hint = STEP_HINTS[st]
-            lines.append(f"➡️ *{label}*: _{escape_md(hint)}_")
+            lines.append(f"➡️ <b>{label}</b>: <i>{esc(hint)}</i>")
         else:
             lines.append(f"◽️ {label}")
     lines.append("")
-    lines.append(f"_Step {idx + 1} of {len(STEPS)}\\. Reply with your answer\\._")
+    lines.append(f"<i>Step {idx + 1} of {len(STEPS)}. Reply with your answer.</i>")
 
     buttons = []
     if idx > 0:
@@ -287,7 +284,7 @@ async def show_wizard(target_chat_id: int, context: ContextTypes.DEFAULT_TYPE, s
     sent = await context.bot.send_message(
         chat_id=target_chat_id,
         text=text,
-        parse_mode="MarkdownV2",
+        parse_mode="HTML",
         reply_markup=markup,
     )
     context.user_data["wizard_msg"] = {
@@ -524,7 +521,7 @@ async def wizard_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         sent = await context.bot.send_message(
             chat_id=event["chat_id"],
             text=render_event_text(event),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=event_keyboard(event_id, full=False),
         )
     except Exception as e:
@@ -556,8 +553,8 @@ async def wizard_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             await context.bot.edit_message_text(
                 chat_id=wm["chat_id"],
                 message_id=wm["message_id"],
-                text=f"✅ Event posted in *{escape_md(title)}*\\.",
-                parse_mode="MarkdownV2",
+                text=f"✅ Event posted in <b>{esc(title)}</b>.",
+                parse_mode="HTML",
                 reply_markup=None,
             )
         except Exception:
@@ -648,7 +645,7 @@ async def on_end_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             chat_id=event["chat_id"],
             message_id=event["message_id"],
             text=render_event_text(event),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=None,
         )
     except Exception as e:
@@ -658,7 +655,7 @@ async def on_end_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await context.bot.send_message(
             chat_id=event["chat_id"],
             text=render_summary_text(event),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.warning("Failed to post summary: %s", e)
@@ -677,7 +674,7 @@ async def _do_edit(context: ContextTypes.DEFAULT_TYPE, event_id: str) -> None:
             chat_id=event["chat_id"],
             message_id=event["message_id"],
             text=render_event_text(event),
-            parse_mode="MarkdownV2",
+            parse_mode="HTML",
             reply_markup=event_keyboard(event_id, full=full),
         )
     except Exception as e:
