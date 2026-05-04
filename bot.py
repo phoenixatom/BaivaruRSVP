@@ -129,11 +129,15 @@ def remember_group(chat) -> None:
 
 
 def display_name(user) -> str:
-    if user.get("username"):
-        return f"@{user['username']}"
     name = user.get("first_name", "")
     if user.get("last_name"):
         name += f" {user['last_name']}"
+    name = name.strip()
+    username = user.get("username")
+    if name and username:
+        return f"{name} (@{username})"
+    if username:
+        return f"@{username}"
     return name or str(user["id"])
 
 
