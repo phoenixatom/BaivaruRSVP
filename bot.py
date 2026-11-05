@@ -147,6 +147,12 @@ def esc(text) -> str:
     return html.escape(str(text))
 
 
+def mention_html(user) -> str:
+    """Clickable link to the user's profile, keyed on their permanent numeric ID
+    so it keeps working even if they change their name or username."""
+    return f'<a href="tg://user?id={int(user["id"])}">{esc(display_name(user))}</a>'
+
+
 def render_event_text(event: dict) -> str:
     participants = event["participants"]
     count = len(participants)
@@ -168,7 +174,7 @@ def render_event_text(event: dict) -> str:
     if participants:
         lines.append("<b>Joined:</b>")
         for i, p in enumerate(participants, start=1):
-            lines.append(f"{i}. {esc(display_name(p))}")
+            lines.append(f"{i}. {mention_html(p)}")
     elif event.get("ended"):
         lines.append("<i>No one joined.</i>")
     else:
@@ -187,7 +193,7 @@ def render_summary_text(event: dict) -> str:
     if participants:
         lines.append("<b>Final participant list:</b>")
         for i, p in enumerate(participants, start=1):
-            lines.append(f"{i}. {esc(display_name(p))}")
+            lines.append(f"{i}. {mention_html(p)}")
     else:
         lines.append("<i>No one joined this event.</i>")
     return "\n".join(lines)
